@@ -10,7 +10,7 @@ import { Dirent, ReadStream, WriteStream } from 'fs';
 import { Disposable } from 'vscode-jsonrpc';
 import { ImportResolver } from '../analyzer/importResolver';
 import { ImportType } from '../analyzer/importResult';
-import { ConfigOptions } from '../common/configOptions';
+import { ConfigOptions, ExecutionEnvironment } from '../common/configOptions';
 import { FileSystem, MkDirOptions, Stats } from '../common/fileSystem';
 import { FileWatcher, FileWatcherEventHandler } from '../common/fileWatcher';
 import { FullAccessHost } from '../common/fullAccessHost';
@@ -22,7 +22,7 @@ import { ServiceKeys } from '../common/serviceKeys';
 import { ServiceProvider } from '../common/serviceProvider';
 import { createServiceProvider } from '../common/serviceProviderExtensions';
 import { Uri } from '../common/uri/uri';
-import { UriEx } from '../common/uri/uriUtils';
+import { UriEx, getFileSpec } from '../common/uri/uriUtils';
 import { PartialStubService } from '../partialStubService';
 import { PyrightFileSystem } from '../pyrightFileSystem';
 import { TestAccessHost } from './harness/testAccessHost';
@@ -823,6 +823,77 @@ describe('Import tests with fake venv', () => {
             });
         });
     }
+
+    describe('glob-root execution environment import resolution', () => {
+        test('resolveImport finds module from project root for glob-matched file', () => {
+            const files = [
+                { path: normalizeSlashes('/mylib/__init__.py'), content: '' },
+                { path: normalizeSlashes('/mylib/core.py'), content: 'x = 1' },
+                { path: normalizeSlashes('/tests/test_core.py'), content: '' },
+            ];
+
+            const result = getImportResult(files, ['mylib', 'core'], (c) => {
+                const env = new ExecutionEnvironment(
+                    'tests',
+                    c.projectRoot,
+                    c.diagnosticRuleSet,
+                    undefined,
+                    undefined,
+                    undefined
+                );
+                env.isGlobRoot = true;
+                env.rootFileSpec = getFileSpec(c.projectRoot, '**/tests');
+                c.executionEnvironments = [env];
+            });
+
+            assert(result.isImportFound, `Import from project root should be found for glob-matched file: ${result.importFailureInfo?.join('\n')}`);
+        });
+
+        test('plain-root environment resolves imports from its own root', () => {
+            const files = [
+                { path: normalizeSlashes('/src/__init__.py'), content: '' },
+                { path: normalizeSlashes('/src/module.py'), content: 'x = 1' },
+                { path: normalizeSlashes('/src/tests/test_module.py'), content: '' },
+            ];
+
+            const result = getImportResult(files, ['module'], (c) => {
+                const env = new ExecutionEnvironment(
+                    'src',
+                    UriEx.file(normalizeSlashes('/src')),
+                    c.diagnosticRuleSet,
+                    undefined,
+                    undefined,
+                    undefined
+                );
+                c.executionEnvironments = [env];
+            });
+
+            assert(result.isImportFound, `Import should resolve from plain-root EE root: ${result.importFailureInfo?.join('\n')}`);
+        });
+
+        test('getModuleNameForImport uses project root for glob-root environment', () => {
+            const files = [
+                { path: normalizeSlashes('/mylib/__init__.py'), content: '' },
+                { path: normalizeSlashes('/mylib/core.py'), content: '' },
+            ];
+
+            const result = getModuleNameForImport(files, (c) => {
+                const env = new ExecutionEnvironment(
+                    'mylib',
+                    c.projectRoot,
+                    c.diagnosticRuleSet,
+                    undefined,
+                    undefined,
+                    undefined
+                );
+                env.isGlobRoot = true;
+                env.rootFileSpec = getFileSpec(c.projectRoot, '**/mylib');
+                c.executionEnvironments = [env];
+            });
+
+            assert.strictEqual(result.moduleName, 'mylib.core');
+        });
+    });
 
     function getImportResult(
         files: { path: string; content: string }[],

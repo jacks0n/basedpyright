@@ -66,6 +66,9 @@ export class ExecutionEnvironment {
     // tools or playgrounds).
     skipNativeLibraries: boolean;
 
+    rootFileSpec?: FileSpec;
+    isGlobRoot: boolean = false;
+
     // Default to "." which indicates every file in the project.
     constructor(
         name: string,
@@ -84,6 +87,13 @@ export class ExecutionEnvironment {
         this.diagnosticRuleSet = { ...defaultDiagRuleSet };
         this.skipNativeLibraries = skipNativeLibraries;
     }
+}
+
+export function getEffectiveImportRoot(execEnv: ExecutionEnvironment, projectRoot: Uri): Uri | undefined {
+    if (execEnv.isGlobRoot) {
+        return projectRoot;
+    }
+    return execEnv.root;
 }
 
 export type DiagnosticLevel = 'none' | 'information' | 'warning' | 'error' | 'hint';
@@ -1333,6 +1343,15 @@ class UnusedConfigDetector<T extends object> {
     unreadOptions = () => (Object.keys(this.proxy) as (keyof T)[]).filter((key) => !this._readOptions.includes(key));
 }
 
+function isValidGlobPattern(pattern: string): boolean {
+    if (!pattern.trim()) return false;
+
+    // "***" is ambiguous (is it ** + * or * + **?)
+    if (/\*{3,}/.test(pattern)) return false;
+
+    return true;
+}
+
 // Internal configuration options. These are derived from a combination
 // of the command line and from a JSON-based config file.
 export class ConfigOptions {
@@ -1526,11 +1545,17 @@ export class ConfigOptions {
     // execution environment is used.
     findExecEnvironment(file: Uri): ExecutionEnvironment {
         return (
-            this.executionEnvironments.find((env) => {
-                const envRoot = Uri.is(env.root) ? env.root : this.projectRoot.resolvePaths(env.root || '');
-                return file.startsWith(envRoot);
-            }) ?? this.getDefaultExecEnvironment()
+            this.executionEnvironments.find((env) => this._fileMatchesEnvironment(file, env)) ??
+            this.getDefaultExecEnvironment()
         );
+    }
+
+    private _fileMatchesEnvironment(file: Uri, env: ExecutionEnvironment): boolean {
+        if (env.isGlobRoot && env.rootFileSpec) {
+            return file.matchesRegex(env.rootFileSpec.regExp);
+        }
+        const envRoot = Uri.is(env.root) ? env.root : this.projectRoot.resolvePaths(env.root || '');
+        return file.startsWith(envRoot);
     }
 
     getExecutionEnvironments(): ExecutionEnvironment[] {
@@ -2043,7 +2068,23 @@ export class ConfigOptions {
 
             // Validate the root.
             if (envObj.root && typeof envObj.root === 'string') {
-                newExecEnv.root = configDirUri.resolvePaths(envObj.root);
+                const hasGlob = /[*?]/.test(envObj.root);
+
+                if (hasGlob) {
+                    if (!isValidGlobPattern(envObj.root)) {
+                        console.error(
+                            `Config executionEnvironments index ${index}: ` +
+                                `root contains invalid glob pattern "${envObj.root}".`
+                        );
+                    } else {
+                        const fileSpec = getFileSpec(this.projectRoot, envObj.root);
+                        newExecEnv.rootFileSpec = fileSpec;
+                        newExecEnv.root = fileSpec.wildcardRoot;
+                        newExecEnv.isGlobRoot = true;
+                    }
+                } else {
+                    newExecEnv.root = configDirUri.resolvePaths(envObj.root);
+                }
             } else {
                 console.error(`Config executionEnvironments index ${index}: missing root value.`);
             }
@@ -2104,6 +2145,28 @@ export class ConfigOptions {
                     newExecEnv.name = envObj.name;
                 } else {
                     console.error(`Config executionEnvironments index ${index} name must be a string.`);
+                }
+            }
+
+            if (envObj.typeCheckingMode !== undefined) {
+                if (typeof envObj.typeCheckingMode === 'string') {
+                    if ((allTypeCheckingModes as readonly string[]).includes(envObj.typeCheckingMode)) {
+                        newExecEnv.diagnosticRuleSet = {
+                            ...(this.constructor as typeof ConfigOptions).getDiagnosticRuleSet(
+                                envObj.typeCheckingMode as TypeCheckingMode
+                            ),
+                        };
+                    } else {
+                        console.error(
+                            `Config executionEnvironments index ${index}: ` +
+                                `invalid "typeCheckingMode" value: "${envObj.typeCheckingMode}". ` +
+                                `expected: ${userFacingOptionsList(allTypeCheckingModes)}`
+                        );
+                    }
+                } else {
+                    console.error(
+                        `Config executionEnvironments index ${index}: "typeCheckingMode" must be a string.`
+                    );
                 }
             }
 

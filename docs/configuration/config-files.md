@@ -314,11 +314,13 @@ The following settings allow more fine grained control over the **typeCheckingMo
 
 
 ## Execution Environment Options
-Pyright allows multiple “execution environments” to be defined for different portions of your source tree. For example, a subtree may be designed to run with different import search paths or a different version of the python interpreter than the rest of the source base.
+Pyright allows multiple "execution environments" to be defined for different portions of your source tree. For example, a subtree may be designed to run with different import search paths or a different version of the python interpreter than the rest of the source base.
 
-The following settings can be specified for each execution environment. Each source file within a project is associated with at most one execution environment -- the first one whose root directory contains that file.
+The following settings can be specified for each execution environment. Each source file within a project is associated with at most one execution environment -- the first one whose root matches that file. Environments are searched in array order; the first match wins.
 
-- **root** [string, required]: Root path for the code that will execute within this execution environment.
+- **root** [string, required]: Root path for the code that will execute within this execution environment. Paths may contain wildcard characters ** (a directory or multiple levels of directories), * (a sequence of zero or more characters), or ? (a single character). For example, `"root": "**/tests"` matches all `tests/` directories at any depth. When a glob pattern is used, import resolution uses the project root rather than the matched directories. *(basedpyright exclusive)*
+
+- **typeCheckingMode** [string, optional]: Specifies the default diagnostic rule set to use for files in this execution environment. If not specified, the global `typeCheckingMode` setting is used. Individual diagnostic rule overrides layer on top of this preset. *(basedpyright exclusive)*
 
 - **extraPaths** [array of strings, optional]: Additional search paths (in addition to the root path) that will be used when searching for modules imported by files within this execution environment. If specified, this overrides the default extraPaths setting when resolving imports for files within this execution environment. Note that each file’s execution environment mapping is independent, so if file A is in one execution environment and imports a second file B within a second execution environment, any imports from B will use the extraPaths in the second execution environment.
 
@@ -327,6 +329,131 @@ The following settings can be specified for each execution environment. Each sou
 - **pythonPlatform** [string, optional]: Specifies the target platform that will be used for this execution environment. If not specified, the global `pythonPlatform` setting is used instead.
 
 In addition, any of the [type check diagnostics settings](config-files.md#type-check-diagnostics-settings) listed above can be specified. These settings act as overrides for the files in this execution environment.
+
+### Glob Patterns in Root
+
+!!! info "basedpyright exclusive"
+
+    Glob pattern support in execution environment `root` is a basedpyright exclusive feature.
+
+The `root` field supports wildcard characters for matching multiple directories:
+
+- `**` matches a directory or multiple levels of directories
+- `*` matches a sequence of zero or more characters within a single path segment
+- `?` matches a single character
+
+For example, `"root": "**/tests"` matches all `tests/` directories at any depth in the project. `"root": "src/*/utils"` matches `src/foo/utils` and `src/bar/utils` but not `src/foo/bar/utils`.
+
+When a glob pattern is used in `root`, import resolution uses the project root rather than the matched directories. This allows you to apply different diagnostic rules to test files without breaking imports.
+
+### Diagnostic-Only Overrides
+
+A common use case is applying relaxed diagnostic rules to test files while keeping them in the same import resolution context as the rest of the project. With glob patterns, this is straightforward:
+
+=== "JSON"
+
+    ```json
+    {
+        "executionEnvironments": [
+            {
+                "root": "**/tests",
+                "reportPrivateUsage": false,
+                "reportMissingParameterType": "none"
+            },
+            {
+                "root": "src"
+            }
+        ]
+    }
+    ```
+
+=== "TOML"
+
+    ```toml
+    [tool.basedpyright]
+    executionEnvironments = [
+        { root = "**/tests", reportPrivateUsage = false, reportMissingParameterType = "none" },
+        { root = "src" }
+    ]
+    ```
+
+All test files in any `tests/` directory get relaxed diagnostic rules, while still being able to import from the main project source code. Import resolution uses the project root for all files, regardless of which execution environment matches.
+
+### First-Match-Wins Ordering
+
+When multiple execution environments could match a file, the first environment in the array that matches wins. This applies to both plain root paths (prefix matching) and glob patterns:
+
+=== "JSON"
+
+    ```json
+    {
+        "executionEnvironments": [
+            { "root": "src/core", "typeCheckingMode": "strict" },
+            { "root": "**/tests", "reportPrivateUsage": false },
+            { "root": "src" }
+        ]
+    }
+    ```
+
+=== "TOML"
+
+    ```toml
+    [tool.basedpyright]
+    executionEnvironments = [
+        { root = "src/core", typeCheckingMode = "strict" },
+        { root = "**/tests", reportPrivateUsage = false },
+        { root = "src" }
+    ]
+    ```
+
+With this configuration:
+
+- `src/core/module.py` matches the first environment (`src/core`) and gets strict type checking
+- `src/core/tests/test_module.py` also matches `src/core` first (plain root prefix match), so it gets strict type checking -- not the `**/tests` rules
+- `lib/tests/test_utils.py` matches the second environment (`**/tests`) and gets `reportPrivateUsage` disabled
+- `src/app/main.py` matches the third environment (`src`) as a fallback
+
+Place more specific environments before broader ones to get the expected behavior.
+
+### typeCheckingMode in Execution Environments
+
+!!! info "basedpyright exclusive"
+
+    Setting `typeCheckingMode` per execution environment is a basedpyright exclusive feature.
+
+Each execution environment can specify its own `typeCheckingMode` to set a base diagnostic rule preset. Individual rule overrides layer on top:
+
+=== "JSON"
+
+    ```json
+    {
+        "typeCheckingMode": "strict",
+        "executionEnvironments": [
+            {
+                "root": "**/tests",
+                "typeCheckingMode": "basic",
+                "reportPrivateUsage": false
+            },
+            {
+                "root": "src"
+            }
+        ]
+    }
+    ```
+
+=== "TOML"
+
+    ```toml
+    [tool.basedpyright]
+    typeCheckingMode = "strict"
+
+    executionEnvironments = [
+        { root = "**/tests", typeCheckingMode = "basic", reportPrivateUsage = false },
+        { root = "src" }
+    ]
+    ```
+
+Test files use "basic" type checking with `reportPrivateUsage` disabled. Source files in `src/` inherit the top-level "strict" mode. The `reportPrivateUsage = false` override layers on top of the "basic" preset.
 
 ## Sample Config File
 The following is an example of a pyright config file:
@@ -377,12 +504,9 @@ The following is an example of a pyright config file:
       ]
     },
     {
-      "root": "src/tests",
-      "reportPrivateUsage": false,
-      "extraPaths": [
-        "src/tests/e2e",
-        "src/sdk"
-      ]
+      "root": "**/tests",
+      "typeCheckingMode": "basic",
+      "reportPrivateUsage": false
     },
     {
       "root": "src"
@@ -413,7 +537,7 @@ pythonPlatform = "Linux"
 executionEnvironments = [
   { root = "src/web", pythonVersion = "3.5", pythonPlatform = "Windows", extraPaths = [ "src/service_libs" ], reportMissingImports = "warning" },
   { root = "src/sdk", pythonVersion = "3.0", extraPaths = [ "src/backend" ] },
-  { root = "src/tests", reportPrivateUsage = false, extraPaths = ["src/tests/e2e", "src/sdk" ]},
+  { root = "**/tests", typeCheckingMode = "basic", reportPrivateUsage = false },
   { root = "src" }
 ]
 ```

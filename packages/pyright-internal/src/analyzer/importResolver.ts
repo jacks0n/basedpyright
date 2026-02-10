@@ -11,7 +11,7 @@
 import type { Dirent } from 'fs';
 
 import { appendArray, flatten, getMapValues, getOrAdd } from '../common/collectionUtils';
-import { ConfigOptions, ExecutionEnvironment, matchFileSpecs } from '../common/configOptions';
+import { ConfigOptions, ExecutionEnvironment, getEffectiveImportRoot, matchFileSpecs } from '../common/configOptions';
 import { Host } from '../common/host';
 import { stubsSuffix } from '../common/pathConsts';
 import { getFileExtension, stripFileExtension } from '../common/pathUtils';
@@ -182,7 +182,8 @@ export class ImportResolver {
             return suggestions;
         }
 
-        const root = getParentImportResolutionRoot(sourceFileUri, execEnv.root);
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        const root = getParentImportResolutionRoot(sourceFileUri, importRoot);
         const origin = sourceFileUri.getDirectory();
 
         let current: Uri | undefined = origin;
@@ -320,9 +321,10 @@ export class ImportResolver {
         detectPyTyped = false
     ) {
         // Cache results of the reverse of resolveImport as we cache resolveImport.
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
         const cache = getOrAdd(
             this._cachedModuleNameResults,
-            execEnv.root?.key,
+            importRoot?.key,
             () => new Map<string, ModuleImportInfo>()
         );
         const key = `${allowInvalidModuleName}.${detectPyTyped}.${fileUri.key}`;
@@ -372,8 +374,9 @@ export class ImportResolver {
         }
 
         // The "default" workspace has a root-less execution environment; ignore it.
-        if (execEnv.root) {
-            roots.push(execEnv.root);
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        if (importRoot) {
+            roots.push(importRoot);
         }
 
         appendArray(roots, execEnv.extraPaths);
@@ -413,7 +416,8 @@ export class ImportResolver {
             return false;
         }
 
-        if (this.partialStubs.isPartialStubPackagesScanned(execEnv)) {
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        if (!importRoot || this.partialStubs.isPathScanned(importRoot)) {
             return false;
         }
 
@@ -423,7 +427,7 @@ export class ImportResolver {
 
         // Add paths to search stub packages.
         addPaths(this._configOptions.stubPath);
-        addPaths(execEnv.root ?? this._configOptions.projectRoot);
+        addPaths(importRoot ?? this._configOptions.projectRoot);
         execEnv.extraPaths.forEach((p) => addPaths(p));
         addPaths(typeshedPathEx);
 
@@ -591,7 +595,8 @@ export class ImportResolver {
         }
 
         // Check whether the given file is in the parent directory import resolution cache.
-        const root = getParentImportResolutionRoot(sourceFileUri, execEnv.root);
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        const root = getParentImportResolutionRoot(sourceFileUri, importRoot);
         if (!this.cachedParentImportResults.checkValidPath(this.fileSystem, sourceFileUri, root)) {
             return importResult;
         }
@@ -718,7 +723,8 @@ export class ImportResolver {
         // If the import is relative, include the source file path in the key.
         const relativeSourceFileUri = moduleDescriptor && moduleDescriptor.leadingDots > 0 ? sourceFileUri : undefined;
 
-        getOrAdd(this._cachedImportResults, execEnv.root?.key, () => new Map<string, ImportResult>()).set(
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        getOrAdd(this._cachedImportResults, importRoot?.key, () => new Map<string, ImportResult>()).set(
             this._getImportCacheKey(relativeSourceFileUri, importName, fromUserFile),
             importResult
         );
@@ -1117,11 +1123,12 @@ export class ImportResolver {
             }
 
             // Look for it in the root directory of the execution environment.
-            if (execEnv.root) {
+            const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+            if (importRoot) {
                 this._getCompletionSuggestionsAbsolute(
                     sourceFileUri,
                     execEnv,
-                    execEnv.root,
+                    importRoot,
                     moduleDescriptor,
                     suggestions
                 );
@@ -1221,8 +1228,9 @@ export class ImportResolver {
         }
 
         // Look for it in the root directory of the execution environment.
-        if (execEnv.root) {
-            const candidateModuleNameInfo = _getModuleNameInfoFromPath(execEnv.root, fileUri);
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        if (importRoot) {
+            const candidateModuleNameInfo = _getModuleNameInfoFromPath(importRoot, fileUri);
 
             if (candidateModuleNameInfo) {
                 if (candidateModuleNameInfo.containsInvalidCharacters) {
@@ -1330,7 +1338,7 @@ export class ImportResolver {
         }
 
         if (detectPyTyped && importType === ImportType.ThirdParty) {
-            const root = getParentImportResolutionRoot(fileUri, execEnv.root);
+            const root = getParentImportResolutionRoot(fileUri, importRoot);
 
             // Go up directories one by one looking for a py.typed file.
             let current: Uri | undefined = fileUri.getDirectory();
@@ -1580,7 +1588,8 @@ export class ImportResolver {
         moduleDescriptor: ImportedModuleDescriptor,
         fromUserFile: boolean
     ) {
-        const cacheForExecEnv = this._cachedImportResults.get(execEnv.root?.key ?? '');
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        const cacheForExecEnv = this._cachedImportResults.get(importRoot?.key ?? '');
         if (!cacheForExecEnv) {
             return undefined;
         }
@@ -1669,12 +1678,13 @@ export class ImportResolver {
         let localImport: ImportResult | undefined;
 
         // Look for it in the root directory of the execution environment.
-        if (execEnv.root) {
-            importLogger?.log(`Looking in root directory of execution environment ` + `'${execEnv.root}'`);
+        const importRoot = getEffectiveImportRoot(execEnv, this._configOptions.projectRoot);
+        if (importRoot) {
+            importLogger?.log(`Looking in root directory of execution environment ` + `'${importRoot}'`);
 
             localImport = this.resolveAbsoluteImport(
                 sourceFileUri,
-                execEnv.root,
+                importRoot,
                 execEnv,
                 moduleDescriptor,
                 importName,
@@ -1756,7 +1766,7 @@ export class ImportResolver {
         // If a library is fully py.typed, then we have found the best match,
         // unless the execution environment is typeshed itself, in which case
         // we don't want to favor py.typed libraries. Use the typeshed lookup below.
-        if (execEnv.root !== this._getTypeshedRoot(this._configOptions.typeshedPath, importLogger)) {
+        if (importRoot !== this._getTypeshedRoot(this._configOptions.typeshedPath, importLogger)) {
             if (bestResultSoFar?.pyTypedInfo && !bestResultSoFar.isPartlyResolved) {
                 return bestResultSoFar;
             }

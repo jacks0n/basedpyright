@@ -1027,9 +1027,14 @@
         "properties": {
           "root": {
             "type": "string",
-            "title": "Path to code subdirectory to which these settings apply",
+            "title": "Path or glob pattern for code to which these settings apply",
+            "description": "Specifies a subdirectory path or a glob pattern that matches multiple directories. Paths may contain wildcard characters ** (a directory or multiple levels of directories), * (a sequence of zero or more characters), or ? (a single character). When a glob pattern is used, import resolution uses the project root rather than the matched directories. (basedpyright exclusive)",
             "default": "",
-            "pattern": "^(.*)$"
+            "pattern": "^(.*)$",
+            "examples": ["src", "**/tests", "src/*/utils"]
+          },
+          "typeCheckingMode": {
+            "$ref": "#/definitions/typeCheckingMode"
           },
           "disableBytesTypePromotions": {
             "$ref": "#/definitions/disableBytesTypePromotions"

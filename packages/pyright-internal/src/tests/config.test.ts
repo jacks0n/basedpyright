@@ -12,7 +12,17 @@ import assert from 'assert';
 import { AnalyzerService } from '../analyzer/service';
 import { deserialize, serialize } from '../backgroundThreadBase';
 import { CommandLineOptions, DiagnosticSeverityOverrides } from '../common/commandLineOptions';
-import { ConfigOptions, ExecutionEnvironment, getStandardDiagnosticRuleSet } from '../common/configOptions';
+import {
+    ConfigOptions,
+    ExecutionEnvironment,
+    getAllDiagnosticRuleSet,
+    getBasicDiagnosticRuleSet,
+    getEffectiveImportRoot,
+    getOffDiagnosticRuleSet,
+    getRecommendedDiagnosticRuleSet,
+    getStandardDiagnosticRuleSet,
+    getStrictDiagnosticRuleSet,
+} from '../common/configOptions';
 import { ConsoleInterface, NullConsole } from '../common/console';
 import { TaskListPriority } from '../common/diagnostic';
 import { combinePaths, normalizePath, normalizeSlashes } from '../common/pathUtils';
@@ -740,4 +750,724 @@ describe(`config test'}`, () => {
             shouldRunAnalysis: () => true,
         });
     }
+
+    describe('glob root support', () => {
+        test('plain root produces identical behavior - no glob fields set', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.isGlobRoot, false);
+            assert.strictEqual(env.rootFileSpec, undefined);
+            assert.ok(env.root);
+            assert.strictEqual(
+                env.root.getFilePath(),
+                cwd.resolvePaths('src').getFilePath()
+            );
+        });
+
+        test('findExecEnvironment matches plain roots identically to pre-glob behavior', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const execEnv = new ExecutionEnvironment(
+                'python',
+                cwd.resolvePaths('src/foo'),
+                getStandardDiagnosticRuleSet(),
+                undefined, undefined, undefined
+            );
+            configOptions.executionEnvironments.push(execEnv);
+
+            const file = cwd.resolvePaths('src/foo/bar.py');
+            assert.strictEqual(configOptions.findExecEnvironment(file), execEnv);
+            assert.strictEqual(execEnv.isGlobRoot, false);
+            assert.strictEqual(execEnv.rootFileSpec, undefined);
+        });
+
+        test('glob root detects wildcards and creates FileSpec', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: '**/tests' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.isGlobRoot, true);
+            assert.ok(env.rootFileSpec);
+            assert.ok(env.rootFileSpec.regExp);
+            assert.ok(env.rootFileSpec.wildcardRoot);
+            assert.strictEqual(env.rootFileSpec.hasDirectoryWildcard, true);
+        });
+
+        test('single-segment wildcard in root creates FileSpec', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src/*/utils' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.isGlobRoot, true);
+            assert.ok(env.rootFileSpec);
+            assert.ok(env.root);
+            assert.ok(env.root.getFilePath().endsWith('/src') || env.root.getFilePath().endsWith('\\src'));
+        });
+
+        test('question mark wildcard in root is detected as glob', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src/test?' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.isGlobRoot, true);
+            assert.ok(env.rootFileSpec);
+        });
+
+        test('invalid glob pattern *** produces error', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: '***/tests' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.strictEqual(console.errors.length, 1);
+            assert.ok(console.errors[0].includes('invalid glob pattern'));
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.isGlobRoot, false);
+            assert.strictEqual(env.rootFileSpec, undefined);
+        });
+
+        test('whitespace-only root takes plain path branch', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: '   ' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.isGlobRoot, false);
+        });
+
+        test('serialization round-trip preserves glob root fields', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: '**/tests' }],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            const serialized = serialize(configOptions);
+            const deserialized = deserialize<ConfigOptions>(serialized);
+
+            const origEnv = configOptions.executionEnvironments[0];
+            const clonedEnv = deserialized.executionEnvironments[0];
+            assert.ok(origEnv);
+            assert.ok(clonedEnv);
+            assert.strictEqual(clonedEnv.isGlobRoot, origEnv.isGlobRoot);
+            assert.ok(clonedEnv.rootFileSpec);
+            assert.ok(clonedEnv.rootFileSpec.regExp);
+            assert.deepEqual(clonedEnv.rootFileSpec.regExp.source, origEnv.rootFileSpec!.regExp.source);
+            assert.deepEqual(clonedEnv.rootFileSpec.regExp.flags, origEnv.rootFileSpec!.regExp.flags);
+        });
+
+        test('mixed plain and glob roots in same config both parse correctly', () => {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [
+                    { root: 'src' },
+                    { root: '**/tests' },
+                ],
+            };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            assert.strictEqual(configOptions.executionEnvironments.length, 2);
+
+            const plainEnv = configOptions.executionEnvironments[0];
+            assert.strictEqual(plainEnv.isGlobRoot, false);
+            assert.strictEqual(plainEnv.rootFileSpec, undefined);
+
+            const globEnv = configOptions.executionEnvironments[1];
+            assert.strictEqual(globEnv.isGlobRoot, true);
+            assert.ok(globEnv.rootFileSpec);
+        });
+
+        describe('glob root matching', () => {
+            test('** glob root matches files at any directory depth', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: '**/tests' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const globEnv = configOptions.executionEnvironments[0];
+                assert.ok(globEnv);
+
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('tests/test_foo.py')),
+                    globEnv,
+                    'direct child of project should match'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/tests/test_foo.py')),
+                    globEnv,
+                    'one level deep should match'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/lib/deep/tests/test_bar.py')),
+                    globEnv,
+                    'deeply nested should match'
+                );
+
+                const nonMatch = configOptions.findExecEnvironment(cwd.resolvePaths('src/testing/foo.py'));
+                assert.notStrictEqual(nonMatch, globEnv, 'partial name match (testing != tests) should not match');
+            });
+
+            test('* glob root matches single path segment only', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src/*/utils' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const globEnv = configOptions.executionEnvironments[0];
+                assert.ok(globEnv);
+
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/foo/utils/helper.py')),
+                    globEnv,
+                    'single segment between src and utils should match'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/bar/utils/deep/module.py')),
+                    globEnv,
+                    'file deep inside matched dir should match'
+                );
+
+                const twoSegments = configOptions.findExecEnvironment(cwd.resolvePaths('src/foo/bar/utils/helper.py'));
+                assert.notStrictEqual(twoSegments, globEnv, 'two segments between src and utils should not match');
+            });
+
+            test('? wildcard matches single character', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src/v?/lib' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const globEnv = configOptions.executionEnvironments[0];
+                assert.ok(globEnv);
+
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/v1/lib/foo.py')),
+                    globEnv,
+                    'single char v1 should match'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/v2/lib/foo.py')),
+                    globEnv,
+                    'single char v2 should match'
+                );
+
+                const twoChars = configOptions.findExecEnvironment(cwd.resolvePaths('src/v10/lib/foo.py'));
+                assert.notStrictEqual(twoChars, globEnv, 'two characters (v10) should not match');
+            });
+
+            test('first-match-wins with plain root before glob root', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src/core' }, { root: '**/tests' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const plainEnv = configOptions.executionEnvironments[0];
+                const globEnv = configOptions.executionEnvironments[1];
+                assert.ok(plainEnv);
+                assert.ok(globEnv);
+
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/core/tests/test_foo.py')),
+                    plainEnv,
+                    'plain env wins for file under src/core even though glob would also match'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('lib/tests/test_bar.py')),
+                    globEnv,
+                    'glob env wins when plain root does not match'
+                );
+
+                const defaultResult = configOptions.findExecEnvironment(cwd.resolvePaths('other/module.py'));
+                assert.notStrictEqual(defaultResult, plainEnv, 'unmatched file should not get plain env');
+                assert.notStrictEqual(defaultResult, globEnv, 'unmatched file should not get glob env');
+            });
+
+            test('first-match-wins with glob root before plain root', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: '**/tests' }, { root: 'src' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const globEnv = configOptions.executionEnvironments[0];
+                const plainEnv = configOptions.executionEnvironments[1];
+                assert.ok(globEnv);
+                assert.ok(plainEnv);
+
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/tests/test_foo.py')),
+                    globEnv,
+                    'glob env wins because it appears first in array'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/module.py')),
+                    plainEnv,
+                    'plain env wins when glob does not match'
+                );
+            });
+
+            test('file matching no environment falls through to default', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: '**/tests' }, { root: 'src/specific' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const defaultEnv = configOptions.findExecEnvironment(cwd.resolvePaths('lib/module.py'));
+                assert.ok(defaultEnv.root);
+                const rootFilePath = Uri.is(defaultEnv.root) ? defaultEnv.root.getFilePath() : defaultEnv.root;
+                assert.strictEqual(
+                    normalizeSlashes(rootFilePath),
+                    normalizeSlashes(configOptions.projectRoot.getFilePath()),
+                    'default environment root should equal project root'
+                );
+            });
+
+            test('multiple glob roots - first match wins', () => {
+                const cwd = UriEx.file(normalizePath(process.cwd()));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: '**/tests' }, { root: '**/test' }],
+                };
+                const fs = new TestFileSystem(false);
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const firstGlobEnv = configOptions.executionEnvironments[0];
+                const secondGlobEnv = configOptions.executionEnvironments[1];
+                assert.ok(firstGlobEnv);
+                assert.ok(secondGlobEnv);
+
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/tests/foo.py')),
+                    firstGlobEnv,
+                    'first glob env matches **/tests'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/test/foo.py')),
+                    secondGlobEnv,
+                    'second glob env matches **/test'
+                );
+                assert.strictEqual(
+                    configOptions.findExecEnvironment(cwd.resolvePaths('src/tests/test/foo.py')),
+                    firstGlobEnv,
+                    'first glob env wins when both could match at different levels'
+                );
+            });
+        });
+
+        describe('typeCheckingMode in execution environments', () => {
+            test('typeCheckingMode strict sets strict rule set', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 'strict' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                const strictRuleSet = getStrictDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, strictRuleSet.reportPrivateUsage);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, strictRuleSet.reportMissingTypeStubs);
+                assert.strictEqual(env.diagnosticRuleSet.strictListInference, strictRuleSet.strictListInference);
+            });
+
+            test('typeCheckingMode off sets off rule set', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 'off' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                const offRuleSet = getOffDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, offRuleSet.reportMissingImports);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingModuleSource, offRuleSet.reportMissingModuleSource);
+            });
+
+            test('typeCheckingMode basic sets basic rule set', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 'basic' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                const basicRuleSet = getBasicDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, basicRuleSet.reportMissingImports);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, basicRuleSet.reportMissingTypeStubs);
+                assert.strictEqual(env.diagnosticRuleSet.strictListInference, basicRuleSet.strictListInference);
+            });
+
+            test('typeCheckingMode recommended sets recommended rule set', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 'recommended' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                const recommendedRuleSet = getRecommendedDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, recommendedRuleSet.reportMissingImports);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, recommendedRuleSet.reportMissingTypeStubs);
+                assert.strictEqual(env.diagnosticRuleSet.strictListInference, recommendedRuleSet.strictListInference);
+            });
+
+            test('typeCheckingMode all sets all rule set', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 'all' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                const allRuleSet = getAllDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, allRuleSet.reportMissingImports);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, allRuleSet.reportMissingTypeStubs);
+                assert.strictEqual(env.diagnosticRuleSet.strictListInference, allRuleSet.strictListInference);
+            });
+
+            test('individual overrides take precedence over typeCheckingMode', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{
+                        root: 'src',
+                        typeCheckingMode: 'strict',
+                        strictListInference: false,
+                        reportPrivateUsage: 'none',
+                    }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                assert.strictEqual(env.diagnosticRuleSet.strictListInference, false);
+                assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, 'none');
+                const strictRuleSet = getStrictDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, strictRuleSet.reportMissingTypeStubs);
+            });
+
+            test('EE without typeCheckingMode inherits top-level', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    typeCheckingMode: 'basic',
+                    executionEnvironments: [{ root: 'src' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                const basicRuleSet = getBasicDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, basicRuleSet.reportMissingImports);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, basicRuleSet.reportMissingTypeStubs);
+                assert.strictEqual(env.diagnosticRuleSet.strictListInference, basicRuleSet.strictListInference);
+            });
+
+            test('invalid typeCheckingMode value produces error', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 'invalid_mode' }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.strictEqual(console.errors.length, 1);
+                assert.ok(console.errors[0].includes('invalid "typeCheckingMode" value'));
+            });
+
+            test('non-string typeCheckingMode value produces error', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{ root: 'src', typeCheckingMode: 123 }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.strictEqual(console.errors.length, 1);
+                assert.ok(console.errors[0].includes('"typeCheckingMode" must be a string'));
+            });
+
+            test('typeCheckingMode works with glob-root EE', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [{
+                        root: '**/tests',
+                        typeCheckingMode: 'off',
+                        reportPrivateUsage: 'none',
+                    }],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                const env = configOptions.executionEnvironments[0];
+                assert.ok(env);
+                assert.strictEqual(env.isGlobRoot, true);
+                const offRuleSet = getOffDiagnosticRuleSet();
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, offRuleSet.reportMissingImports);
+                assert.strictEqual(env.diagnosticRuleSet.reportMissingModuleSource, offRuleSet.reportMissingModuleSource);
+                assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, 'none');
+            });
+
+            test('multiple EEs with different typeCheckingModes', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [
+                        { root: 'src', typeCheckingMode: 'strict' },
+                        { root: 'tests', typeCheckingMode: 'off' },
+                    ],
+                };
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                assert.deepStrictEqual(console.errors, []);
+                assert.strictEqual(configOptions.executionEnvironments.length, 2);
+
+                const srcEnv = configOptions.executionEnvironments[0];
+                const testsEnv = configOptions.executionEnvironments[1];
+                assert.ok(srcEnv);
+                assert.ok(testsEnv);
+
+                const strictRuleSet = getStrictDiagnosticRuleSet();
+                assert.strictEqual(srcEnv.diagnosticRuleSet.reportPrivateUsage, strictRuleSet.reportPrivateUsage);
+                assert.strictEqual(srcEnv.diagnosticRuleSet.strictListInference, strictRuleSet.strictListInference);
+
+                const offRuleSet = getOffDiagnosticRuleSet();
+                assert.strictEqual(testsEnv.diagnosticRuleSet.reportMissingImports, offRuleSet.reportMissingImports);
+                assert.strictEqual(testsEnv.diagnosticRuleSet.strictListInference, offRuleSet.strictListInference);
+            });
+        });
+
+        describe('getEffectiveImportRoot', () => {
+            test('returns projectRoot for glob-root environment', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const configOptions = new ConfigOptions(cwd);
+                const json = { executionEnvironments: [{ root: '**/tests' }] };
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                const env = configOptions.executionEnvironments[0];
+                assert.strictEqual(env.isGlobRoot, true);
+
+                const effectiveRoot = getEffectiveImportRoot(env, configOptions.projectRoot);
+                assert.ok(effectiveRoot);
+                assert.strictEqual(effectiveRoot.key, configOptions.projectRoot.key);
+            });
+
+            test('returns execEnv.root for plain-root environment', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const configOptions = new ConfigOptions(cwd);
+                const json = { executionEnvironments: [{ root: 'src' }] };
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                const env = configOptions.executionEnvironments[0];
+                assert.strictEqual(env.isGlobRoot, false);
+
+                const effectiveRoot = getEffectiveImportRoot(env, configOptions.projectRoot);
+                assert.ok(effectiveRoot);
+                assert.strictEqual(effectiveRoot.key, env.root!.key);
+            });
+
+            test('glob-root with diagnostic overrides uses projectRoot while applying overrides', () => {
+                const cwd = UriEx.file(normalizeSlashes('/'));
+                const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+                const configOptions = new ConfigOptions(cwd);
+                const json = {
+                    executionEnvironments: [
+                        { root: '**/tests', reportPrivateUsage: false }
+                    ],
+                };
+                const console = new ErrorTrackingNullConsole();
+                const sp = createServiceProvider(fs, console);
+                configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+                configOptions.setupExecutionEnvironments(json, cwd, console);
+
+                const env = configOptions.executionEnvironments[0];
+                const effectiveRoot = getEffectiveImportRoot(env, configOptions.projectRoot);
+
+                assert.strictEqual(effectiveRoot!.key, configOptions.projectRoot.key);
+                assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, 'none');
+            });
+        });
+    });
 });

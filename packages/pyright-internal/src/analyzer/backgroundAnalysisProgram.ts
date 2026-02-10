@@ -277,7 +277,8 @@ export class BackgroundAnalysisProgram {
     }
 
     private _ensurePartialStubPackages(execEnv: ExecutionEnvironment) {
-        this._backgroundAnalysis?.ensurePartialStubPackages(execEnv.root?.toString());
+        const execEnvIndex = this.configOptions.getExecutionEnvironments().indexOf(execEnv);
+        this._backgroundAnalysis?.ensurePartialStubPackages(execEnvIndex);
         return this._importResolver.ensurePartialStubPackages(execEnv);
     }
 
