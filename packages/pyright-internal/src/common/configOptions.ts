@@ -7,6 +7,9 @@
  * Class that holds the configuration options for the analyzer.
  */
 
+import { globSync } from 'node:fs';
+import { matchesGlob } from 'node:path/posix';
+
 import { ImportLogger } from '../analyzer/importLogger';
 import { getPathsFromPthFiles } from '../analyzer/pythonPathUtils';
 import * as pathConsts from '../common/pathConsts';
@@ -27,7 +30,7 @@ import { PythonVersion, latestStablePythonVersion } from './pythonVersion';
 import { ServiceKeys } from './serviceKeys';
 import { ServiceProvider } from './serviceProvider';
 import { Uri } from './uri/uri';
-import { FileSpec, getFileSpec, isDirectory } from './uri/uriUtils';
+import { FileSpec, getFileSpec, getWildcardRoot, isDirectory } from './uri/uriUtils';
 import { userFacingOptionsList } from './stringUtils';
 
 // prevent upstream changes from sneaking in and adding errors using console.error,
@@ -65,6 +68,8 @@ export class ExecutionEnvironment {
     // be expensive and are not needed for some use cases (e.g. web-based
     // tools or playgrounds).
     skipNativeLibraries: boolean;
+
+    rootGlob?: string;
 
     // Default to "." which indicates every file in the project.
     constructor(
@@ -1526,11 +1531,19 @@ export class ConfigOptions {
     // execution environment is used.
     findExecEnvironment(file: Uri): ExecutionEnvironment {
         return (
-            this.executionEnvironments.find((env) => {
-                const envRoot = Uri.is(env.root) ? env.root : this.projectRoot.resolvePaths(env.root || '');
-                return file.startsWith(envRoot);
-            }) ?? this.getDefaultExecEnvironment()
+            this.executionEnvironments.find((env) => this._fileMatchesEnvironment(file, env)) ??
+            this.getDefaultExecEnvironment()
         );
+    }
+
+    private _fileMatchesEnvironment(file: Uri, env: ExecutionEnvironment): boolean {
+        if (env.rootGlob !== undefined) {
+            const relative = this.projectRoot.getRelativePath(file)?.slice(2);
+            if (relative === undefined) return false;
+            return matchesGlob(relative, env.rootGlob + '/**');
+        }
+        const envRoot = Uri.is(env.root) ? env.root : this.projectRoot.resolvePaths(env.root || '');
+        return file.startsWith(envRoot);
     }
 
     getExecutionEnvironments(): ExecutionEnvironment[] {
@@ -1691,7 +1704,7 @@ export class ConfigOptions {
                     if (typeof path !== 'string') {
                         console.error(`Config "extraPaths" field ${pathIndex} must be a string.`);
                     } else {
-                        configExtraPaths!.push(configDirUri.resolvePaths(path));
+                        this._resolveExtraPath(path, configDirUri, configExtraPaths, console);
                     }
                 });
                 this.defaultExtraPaths = [...configExtraPaths];
@@ -1989,6 +2002,20 @@ export class ConfigOptions {
         return this.pythonEnvironmentName || this.pythonPath?.toString() || 'python';
     }
 
+    private _resolveExtraPath(path: string, configDirUri: Uri, out: Uri[], console: ConsoleInterface) {
+        if (/[*?]/.test(path)) {
+            try {
+                for (const match of globSync(path, { cwd: configDirUri.getFilePath() })) {
+                    out.push(configDirUri.resolvePaths(match));
+                }
+            } catch (e) {
+                console.error(`Failed to expand glob pattern "${path}": ${e}`);
+            }
+        } else {
+            out.push(configDirUri.resolvePaths(path));
+        }
+    }
+
     private _convertBoolean(value: any, fieldName: string, defaultValue: boolean): boolean {
         if (value === undefined) {
             return defaultValue;
@@ -2043,7 +2070,8 @@ export class ConfigOptions {
 
             // Validate the root.
             if (envObj.root && typeof envObj.root === 'string') {
-                newExecEnv.root = configDirUri.resolvePaths(envObj.root);
+                newExecEnv.rootGlob = envObj.root;
+                newExecEnv.root = getWildcardRoot(configDirUri, envObj.root);
             } else {
                 console.error(`Config executionEnvironments index ${index}: missing root value.`);
             }
@@ -2067,7 +2095,7 @@ export class ConfigOptions {
                                     ` extraPaths field ${pathIndex} must be a string.`
                             );
                         } else {
-                            newExecEnv.extraPaths.push(configDirUri.resolvePaths(path));
+                            this._resolveExtraPath(path, configDirUri, newExecEnv.extraPaths, console);
                         }
                     });
                 }
