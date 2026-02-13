@@ -320,6 +320,8 @@ The following settings can be specified for each execution environment. Each sou
 
 - **root** [string, required]: Root path for the code that will execute within this execution environment.
 
+- **typeCheckingMode** [string, optional]: Specifies the default diagnostic rule set to use for files in this execution environment. If not specified, the global `typeCheckingMode` setting is used. Individual diagnostic rule overrides layer on top of this preset. *(basedpyright exclusive)*
+
 - **extraPaths** [array of strings, optional]: Additional search paths (in addition to the root path) that will be used when searching for modules imported by files within this execution environment. If specified, this overrides the default extraPaths setting when resolving imports for files within this execution environment. Note that each file’s execution environment mapping is independent, so if file A is in one execution environment and imports a second file B within a second execution environment, any imports from B will use the extraPaths in the second execution environment.
 
 - **pythonVersion** [string, optional]: The version of Python used for this execution environment. If not specified, the global `pythonVersion` setting is used instead.
@@ -327,6 +329,46 @@ The following settings can be specified for each execution environment. Each sou
 - **pythonPlatform** [string, optional]: Specifies the target platform that will be used for this execution environment. If not specified, the global `pythonPlatform` setting is used instead.
 
 In addition, any of the [type check diagnostics settings](config-files.md#type-check-diagnostics-settings) listed above can be specified. These settings act as overrides for the files in this execution environment.
+
+### typeCheckingMode in Execution Environments
+
+!!! info "basedpyright exclusive"
+
+    Setting `typeCheckingMode` per execution environment is a basedpyright exclusive feature.
+
+Each execution environment can specify its own `typeCheckingMode` to set a base diagnostic rule preset. Individual rule overrides layer on top:
+
+=== "JSON"
+
+    ```json
+    {
+        "typeCheckingMode": "strict",
+        "executionEnvironments": [
+            {
+                "root": "tests",
+                "typeCheckingMode": "basic",
+                "reportPrivateUsage": false
+            },
+            {
+                "root": "src"
+            }
+        ]
+    }
+    ```
+
+=== "TOML"
+
+    ```toml
+    [tool.basedpyright]
+    typeCheckingMode = "strict"
+
+    executionEnvironments = [
+        { root = "tests", typeCheckingMode = "basic", reportPrivateUsage = false },
+        { root = "src" }
+    ]
+    ```
+
+Test files use "basic" type checking with `reportPrivateUsage` disabled. Source files in `src/` inherit the top-level "strict" mode. The `reportPrivateUsage = false` override layers on top of the "basic" preset.
 
 ## Sample Config File
 The following is an example of a pyright config file:
@@ -378,11 +420,8 @@ The following is an example of a pyright config file:
     },
     {
       "root": "src/tests",
-      "reportPrivateUsage": false,
-      "extraPaths": [
-        "src/tests/e2e",
-        "src/sdk"
-      ]
+      "typeCheckingMode": "basic",
+      "reportPrivateUsage": false
     },
     {
       "root": "src"
@@ -413,7 +452,7 @@ pythonPlatform = "Linux"
 executionEnvironments = [
   { root = "src/web", pythonVersion = "3.5", pythonPlatform = "Windows", extraPaths = [ "src/service_libs" ], reportMissingImports = "warning" },
   { root = "src/sdk", pythonVersion = "3.0", extraPaths = [ "src/backend" ] },
-  { root = "src/tests", reportPrivateUsage = false, extraPaths = ["src/tests/e2e", "src/sdk" ]},
+  { root = "src/tests", typeCheckingMode = "basic", reportPrivateUsage = false },
   { root = "src" }
 ]
 ```

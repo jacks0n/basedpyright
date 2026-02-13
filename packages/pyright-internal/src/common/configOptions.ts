@@ -2107,6 +2107,28 @@ export class ConfigOptions {
                 }
             }
 
+            if (envObj.typeCheckingMode !== undefined) {
+                if (typeof envObj.typeCheckingMode === 'string') {
+                    if ((allTypeCheckingModes as readonly string[]).includes(envObj.typeCheckingMode)) {
+                        newExecEnv.diagnosticRuleSet = {
+                            ...(this.constructor as typeof ConfigOptions).getDiagnosticRuleSet(
+                                envObj.typeCheckingMode as TypeCheckingMode
+                            ),
+                        };
+                    } else {
+                        console.error(
+                            `Config executionEnvironments index ${index}: ` +
+                                `invalid "typeCheckingMode" value: "${envObj.typeCheckingMode}". ` +
+                                `expected: ${userFacingOptionsList(allTypeCheckingModes)}`
+                        );
+                    }
+                } else {
+                    console.error(
+                        `Config executionEnvironments index ${index}: "typeCheckingMode" must be a string.`
+                    );
+                }
+            }
+
             // Apply overrides from the config file for the boolean overrides.
             getBooleanDiagnosticRules(/* includeNonOverridable */ true).forEach((ruleName) => {
                 (newExecEnv.diagnosticRuleSet as any)[ruleName] = this._convertBoolean(

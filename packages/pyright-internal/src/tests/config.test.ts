@@ -12,7 +12,16 @@ import assert from 'assert';
 import { AnalyzerService } from '../analyzer/service';
 import { deserialize, serialize } from '../backgroundThreadBase';
 import { CommandLineOptions, DiagnosticSeverityOverrides } from '../common/commandLineOptions';
-import { ConfigOptions, ExecutionEnvironment, getStandardDiagnosticRuleSet } from '../common/configOptions';
+import {
+    ConfigOptions,
+    ExecutionEnvironment,
+    getAllDiagnosticRuleSet,
+    getBasicDiagnosticRuleSet,
+    getOffDiagnosticRuleSet,
+    getRecommendedDiagnosticRuleSet,
+    getStandardDiagnosticRuleSet,
+    getStrictDiagnosticRuleSet,
+} from '../common/configOptions';
 import { ConsoleInterface, NullConsole } from '../common/console';
 import { TaskListPriority } from '../common/diagnostic';
 import { combinePaths, normalizePath, normalizeSlashes } from '../common/pathUtils';
@@ -740,4 +749,247 @@ describe(`config test'}`, () => {
             shouldRunAnalysis: () => true,
         });
     }
+
+    describe('typeCheckingMode in execution environments', () => {
+        test('typeCheckingMode strict sets strict rule set', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 'strict' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const strictRuleSet = getStrictDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, strictRuleSet.reportPrivateUsage);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, strictRuleSet.reportMissingTypeStubs);
+            assert.strictEqual(env.diagnosticRuleSet.strictListInference, strictRuleSet.strictListInference);
+        });
+
+        test('typeCheckingMode off sets off rule set', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 'off' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const offRuleSet = getOffDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, offRuleSet.reportMissingImports);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingModuleSource, offRuleSet.reportMissingModuleSource);
+        });
+
+        test('typeCheckingMode basic sets basic rule set', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 'basic' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const basicRuleSet = getBasicDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, basicRuleSet.reportMissingImports);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, basicRuleSet.reportMissingTypeStubs);
+            assert.strictEqual(env.diagnosticRuleSet.strictListInference, basicRuleSet.strictListInference);
+        });
+
+        test('typeCheckingMode recommended sets recommended rule set', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 'recommended' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const recommendedRuleSet = getRecommendedDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, recommendedRuleSet.reportMissingImports);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, recommendedRuleSet.reportMissingTypeStubs);
+            assert.strictEqual(env.diagnosticRuleSet.strictListInference, recommendedRuleSet.strictListInference);
+        });
+
+        test('typeCheckingMode all sets all rule set', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 'all' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const allRuleSet = getAllDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, allRuleSet.reportMissingImports);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, allRuleSet.reportMissingTypeStubs);
+            assert.strictEqual(env.diagnosticRuleSet.strictListInference, allRuleSet.strictListInference);
+        });
+
+        test('individual overrides take precedence over typeCheckingMode', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{
+                    root: 'src',
+                    typeCheckingMode: 'strict',
+                    strictListInference: false,
+                    reportPrivateUsage: 'none',
+                }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.diagnosticRuleSet.strictListInference, false);
+            assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, 'none');
+            const strictRuleSet = getStrictDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, strictRuleSet.reportMissingTypeStubs);
+        });
+
+        test('EE without typeCheckingMode inherits top-level', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                typeCheckingMode: 'basic',
+                executionEnvironments: [{ root: 'src' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const basicRuleSet = getBasicDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, basicRuleSet.reportMissingImports);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingTypeStubs, basicRuleSet.reportMissingTypeStubs);
+            assert.strictEqual(env.diagnosticRuleSet.strictListInference, basicRuleSet.strictListInference);
+        });
+
+        test('invalid typeCheckingMode value produces error', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 'invalid_mode' }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.strictEqual(console.errors.length, 1);
+            assert.ok(console.errors[0].includes('invalid "typeCheckingMode" value'));
+        });
+
+        test('non-string typeCheckingMode value produces error', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{ root: 'src', typeCheckingMode: 123 }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.strictEqual(console.errors.length, 1);
+            assert.ok(console.errors[0].includes('"typeCheckingMode" must be a string'));
+        });
+
+        test('typeCheckingMode works with plain-root EE and diagnostic overrides', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [{
+                    root: 'tests',
+                    typeCheckingMode: 'off',
+                    reportPrivateUsage: 'none',
+                }],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            const offRuleSet = getOffDiagnosticRuleSet();
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingImports, offRuleSet.reportMissingImports);
+            assert.strictEqual(env.diagnosticRuleSet.reportMissingModuleSource, offRuleSet.reportMissingModuleSource);
+            assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, 'none');
+        });
+
+        test('multiple EEs with different typeCheckingModes', () => {
+            const cwd = UriEx.file(normalizeSlashes('/'));
+            const configOptions = new ConfigOptions(cwd);
+            const json = {
+                executionEnvironments: [
+                    { root: 'src', typeCheckingMode: 'strict' },
+                    { root: 'tests', typeCheckingMode: 'off' },
+                ],
+            };
+            const fs = new TestFileSystem(false, { cwd: normalizeSlashes('/') });
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+
+            assert.deepStrictEqual(console.errors, []);
+            assert.strictEqual(configOptions.executionEnvironments.length, 2);
+
+            const srcEnv = configOptions.executionEnvironments[0];
+            const testsEnv = configOptions.executionEnvironments[1];
+            assert.ok(srcEnv);
+            assert.ok(testsEnv);
+
+            const strictRuleSet = getStrictDiagnosticRuleSet();
+            assert.strictEqual(srcEnv.diagnosticRuleSet.reportPrivateUsage, strictRuleSet.reportPrivateUsage);
+            assert.strictEqual(srcEnv.diagnosticRuleSet.strictListInference, strictRuleSet.strictListInference);
+
+            const offRuleSet = getOffDiagnosticRuleSet();
+            assert.strictEqual(testsEnv.diagnosticRuleSet.reportMissingImports, offRuleSet.reportMissingImports);
+            assert.strictEqual(testsEnv.diagnosticRuleSet.strictListInference, offRuleSet.strictListInference);
+        });
+    });
 });

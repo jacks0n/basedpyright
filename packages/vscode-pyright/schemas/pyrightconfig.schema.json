@@ -1031,6 +1031,9 @@
             "default": "",
             "pattern": "^(.*)$"
           },
+          "typeCheckingMode": {
+            "$ref": "#/definitions/typeCheckingMode"
+          },
           "disableBytesTypePromotions": {
             "$ref": "#/definitions/disableBytesTypePromotions"
           },
