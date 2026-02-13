@@ -25,6 +25,7 @@
     "extraPaths": {
       "type": "array",
       "title": "Additional import search resolution paths",
+      "description": "Glob patterns (**, *, ?) are supported and expanded at configuration time.",
       "items": {
         "type": "string",
         "title": "Additional import search resolution path",
@@ -1027,9 +1028,11 @@
         "properties": {
           "root": {
             "type": "string",
-            "title": "Path to code subdirectory to which these settings apply",
+            "title": "Path or glob pattern for code to which these settings apply",
+            "description": "Root path or glob pattern (**, *, ?). Glob patterns use the project root for import resolution. (basedpyright exclusive)",
             "default": "",
-            "pattern": "^(.*)$"
+            "pattern": "^(.*)$",
+            "examples": ["src", "**/tests", "src/*/utils"]
           },
           "disableBytesTypePromotions": {
             "$ref": "#/definitions/disableBytesTypePromotions"

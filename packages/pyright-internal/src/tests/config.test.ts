@@ -12,7 +12,11 @@ import assert from 'assert';
 import { AnalyzerService } from '../analyzer/service';
 import { deserialize, serialize } from '../backgroundThreadBase';
 import { CommandLineOptions, DiagnosticSeverityOverrides } from '../common/commandLineOptions';
-import { ConfigOptions, ExecutionEnvironment, getStandardDiagnosticRuleSet } from '../common/configOptions';
+import {
+    ConfigOptions,
+    ExecutionEnvironment,
+    getStandardDiagnosticRuleSet,
+} from '../common/configOptions';
 import { ConsoleInterface, NullConsole } from '../common/console';
 import { TaskListPriority } from '../common/diagnostic';
 import { combinePaths, normalizePath, normalizeSlashes } from '../common/pathUtils';
@@ -740,4 +744,76 @@ describe(`config test'}`, () => {
             shouldRunAnalysis: () => true,
         });
     }
+
+    describe('glob root support', () => {
+        function setupExecEnvConfig(roots: ({ root: string } & Record<string, unknown>)[]) {
+            const cwd = UriEx.file(normalizePath(process.cwd()));
+            const configOptions = new ConfigOptions(cwd);
+            const json = { executionEnvironments: roots };
+            const fs = new TestFileSystem(false);
+            const console = new ErrorTrackingNullConsole();
+            const sp = createServiceProvider(fs, console);
+            configOptions.initializeFromJson(json, cwd, sp, new NoAccessHost());
+            configOptions.setupExecutionEnvironments(json, cwd, console);
+            return { cwd, configOptions, console };
+        }
+
+        test.each([
+            'src', '**/tests', 'src/*/utils', 'src/test?', '***/tests', '   ',
+        ])('root "%s" sets rootGlob', (root) => {
+            const { configOptions, console } = setupExecEnvConfig([{ root }]);
+            assert.deepStrictEqual(console.errors, []);
+            const env = configOptions.executionEnvironments[0];
+            assert.ok(env);
+            assert.strictEqual(env.rootGlob, root);
+            assert.ok(env.root);
+        });
+
+        test('serialization round-trip preserves rootGlob', () => {
+            const { configOptions } = setupExecEnvConfig([{ root: '**/tests' }]);
+            const cloned = deserialize<ConfigOptions>(serialize(configOptions));
+            assert.strictEqual(
+                cloned.executionEnvironments[0].rootGlob,
+                configOptions.executionEnvironments[0].rootGlob
+            );
+        });
+
+        test.each([
+            { roots: ['**/tests'], file: 'tests/test_foo.py', envIndex: 0 },
+            { roots: ['**/tests'], file: 'src/tests/test_foo.py', envIndex: 0 },
+            { roots: ['**/tests'], file: 'src/lib/deep/tests/test_bar.py', envIndex: 0 },
+            { roots: ['**/tests'], file: 'src/testing/foo.py', envIndex: -1 },
+            { roots: ['src/*/utils'], file: 'src/foo/utils/helper.py', envIndex: 0 },
+            { roots: ['src/*/utils'], file: 'src/foo/bar/utils/helper.py', envIndex: -1 },
+            { roots: ['src/v?/lib'], file: 'src/v1/lib/foo.py', envIndex: 0 },
+            { roots: ['src/v?/lib'], file: 'src/v10/lib/foo.py', envIndex: -1 },
+            { roots: ['src/core', '**/tests'], file: 'src/core/tests/test_foo.py', envIndex: 0 },
+            { roots: ['src/core', '**/tests'], file: 'lib/tests/test_bar.py', envIndex: 1 },
+            { roots: ['src/core', '**/tests'], file: 'other/module.py', envIndex: -1 },
+            { roots: ['**/tests', 'src'], file: 'src/tests/test_foo.py', envIndex: 0 },
+            { roots: ['**/tests', 'src'], file: 'src/module.py', envIndex: 1 },
+            { roots: ['**/tests', '**/test'], file: 'src/tests/foo.py', envIndex: 0 },
+            { roots: ['**/tests', '**/test'], file: 'src/test/foo.py', envIndex: 1 },
+            { roots: ['**/tests', '**/test'], file: 'src/tests/test/foo.py', envIndex: 0 },
+        ])('roots $roots: "$file" -> env $envIndex', ({ roots, file, envIndex }) => {
+            const { cwd, configOptions } = setupExecEnvConfig(roots.map((root) => ({ root })));
+            const result = configOptions.findExecEnvironment(cwd.resolvePaths(file));
+            if (envIndex >= 0) {
+                assert.strictEqual(result, configOptions.executionEnvironments[envIndex]);
+            } else {
+                for (const env of configOptions.executionEnvironments) {
+                    assert.notStrictEqual(result, env);
+                }
+            }
+        });
+
+        test('glob root with diagnostic overrides', () => {
+            const { configOptions } = setupExecEnvConfig([
+                { root: '**/tests', reportPrivateUsage: false },
+            ]);
+            const env = configOptions.executionEnvironments[0];
+            assert.strictEqual(env.root!.key, configOptions.projectRoot.key);
+            assert.strictEqual(env.diagnosticRuleSet.reportPrivateUsage, 'none');
+        });
+    });
 });

@@ -55,7 +55,7 @@ export interface IBackgroundAnalysis extends Disposable {
     setConfigOptions(configOptions: ConfigOptions): void;
     setTrackedFiles(fileUris: Uri[]): void;
     setAllowedThirdPartyImports(importNames: string[]): void;
-    ensurePartialStubPackages(executionRoot: string | undefined): void;
+    ensurePartialStubPackages(execEnvIndex: number): void;
     setFileOpened(fileUri: Uri, version: number | null, contents: string, options: OpenFileOptions): void;
     updateChainedUri(fileUri: Uri, chainedUri: Uri | undefined): void;
     setFileClosed(fileUri: Uri, isTracked?: boolean): void;
@@ -158,8 +158,8 @@ export class BackgroundAnalysisBase implements IBackgroundAnalysis {
         this.enqueueRequest({ requestType: 'setAllowedThirdPartyImports', data: serialize(importNames) });
     }
 
-    ensurePartialStubPackages(executionRoot: string | undefined) {
-        this.enqueueRequest({ requestType: 'ensurePartialStubPackages', data: serialize({ executionRoot }) });
+    ensurePartialStubPackages(execEnvIndex: number) {
+        this.enqueueRequest({ requestType: 'ensurePartialStubPackages', data: serialize({ execEnvIndex }) });
     }
 
     setFileOpened(fileUri: Uri, version: number | null, contents: string, options: OpenFileOptions) {
@@ -589,8 +589,8 @@ export abstract class BackgroundAnalysisRunnerBase extends BackgroundThreadBase 
             }
 
             case 'ensurePartialStubPackages': {
-                const { executionRoot } = deserialize(msg.data);
-                this.handleEnsurePartialStubPackages(executionRoot);
+                const { execEnvIndex } = deserialize(msg.data);
+                this.handleEnsurePartialStubPackages(execEnvIndex);
                 break;
             }
 
@@ -775,10 +775,8 @@ export abstract class BackgroundAnalysisRunnerBase extends BackgroundThreadBase 
         this.program.setAllowedThirdPartyImports(importNames);
     }
 
-    protected handleEnsurePartialStubPackages(executionRoot: string | undefined) {
-        const execEnv = this._configOptions
-            .getExecutionEnvironments()
-            .find((e) => e.root?.toString() === executionRoot);
+    protected handleEnsurePartialStubPackages(execEnvIndex: number) {
+        const execEnv = this._configOptions.getExecutionEnvironments()[execEnvIndex];
         if (execEnv) {
             this.importResolver.ensurePartialStubPackages(execEnv);
         }

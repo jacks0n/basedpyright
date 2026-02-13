@@ -30,7 +30,7 @@ The following settings control the *environment* in which basedpyright will chec
 
 - **verboseOutput** [boolean]: Specifies whether output logs should be verbose. This is useful when diagnosing certain problems like import resolution issues.
 
-- **extraPaths** [array of strings, optional]: Additional search paths that will be used when searching for modules imported by files.
+- **extraPaths** [array of strings, optional]: Additional search paths that will be used when searching for modules imported by files. Glob patterns (`**`, `*`, `?`) are supported *(basedpyright exclusive)* — matching directories are expanded at configuration time.
 
 - **pythonVersion** [string, optional]: Specifies the version of Python that will be used to execute the source code. The version should be specified as a string in the format "M.m" where M is the major version and m is the minor (e.g. `"3.0"` or `"3.6"`). If a version is provided, pyright will generate errors if the source code makes use of language features that are not supported in that version. It will also tailor its use of type stub files, which conditionalizes type definitions based on the version. If no version is specified, pyright will use the version of the current python interpreter, if one is present.
 
@@ -314,13 +314,13 @@ The following settings allow more fine grained control over the **typeCheckingMo
 
 
 ## Execution Environment Options
-Pyright allows multiple “execution environments” to be defined for different portions of your source tree. For example, a subtree may be designed to run with different import search paths or a different version of the python interpreter than the rest of the source base.
+Pyright allows multiple "execution environments" to be defined for different portions of your source tree. For example, a subtree may be designed to run with different import search paths or a different version of the python interpreter than the rest of the source base.
 
-The following settings can be specified for each execution environment. Each source file within a project is associated with at most one execution environment -- the first one whose root directory contains that file.
+The following settings can be specified for each execution environment. Each source file within a project is associated with at most one execution environment -- the first one whose root matches that file. Environments are searched in array order; the first match wins.
 
-- **root** [string, required]: Root path for the code that will execute within this execution environment.
+- **root** [string, required]: Root path for the code that will execute within this execution environment. Glob patterns (`**`, `*`, `?`) are supported *(basedpyright exclusive)* — when used, import resolution falls back to the project root.
 
-- **extraPaths** [array of strings, optional]: Additional search paths (in addition to the root path) that will be used when searching for modules imported by files within this execution environment. If specified, this overrides the default extraPaths setting when resolving imports for files within this execution environment. Note that each file’s execution environment mapping is independent, so if file A is in one execution environment and imports a second file B within a second execution environment, any imports from B will use the extraPaths in the second execution environment.
+- **extraPaths** [array of strings, optional]: Additional search paths (in addition to the root path) that will be used when searching for modules imported by files within this execution environment. Glob patterns (`**`, `*`, `?`) are supported *(basedpyright exclusive)* — matching directories are expanded at configuration time. If specified, this overrides the default extraPaths setting when resolving imports for files within this execution environment. Note that each file's execution environment mapping is independent, so if file A is in one execution environment and imports a second file B within a second execution environment, any imports from B will use the extraPaths in the second execution environment.
 
 - **pythonVersion** [string, optional]: The version of Python used for this execution environment. If not specified, the global `pythonVersion` setting is used instead.
 
@@ -377,10 +377,10 @@ The following is an example of a pyright config file:
       ]
     },
     {
-      "root": "src/tests",
+      "root": "**/tests",
       "reportPrivateUsage": false,
       "extraPaths": [
-        "src/tests/e2e",
+        "**/fixtures",
         "src/sdk"
       ]
     },
@@ -413,7 +413,7 @@ pythonPlatform = "Linux"
 executionEnvironments = [
   { root = "src/web", pythonVersion = "3.5", pythonPlatform = "Windows", extraPaths = [ "src/service_libs" ], reportMissingImports = "warning" },
   { root = "src/sdk", pythonVersion = "3.0", extraPaths = [ "src/backend" ] },
-  { root = "src/tests", reportPrivateUsage = false, extraPaths = ["src/tests/e2e", "src/sdk" ]},
+  { root = "**/tests", reportPrivateUsage = false, extraPaths = ["**/fixtures", "src/sdk"] },
   { root = "src" }
 ]
 ```

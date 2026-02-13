@@ -413,7 +413,7 @@ export class ImportResolver {
             return false;
         }
 
-        if (this.partialStubs.isPartialStubPackagesScanned(execEnv)) {
+        if (execEnv.root && this.partialStubs.isPathScanned(execEnv.root)) {
             return false;
         }
 
